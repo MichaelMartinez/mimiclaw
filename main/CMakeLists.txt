@@ -23,6 +23,7 @@ idf_component_register(
         "tools/tool_gpio.c"
         "tools/gpio_policy.c"
         "tools/tool_subagent.c"
+        "tools/tool_message.c"
         "skills/skill_loader.c"
         "onboard/wifi_onboard.c"
     INCLUDE_DIRS
