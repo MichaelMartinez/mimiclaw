@@ -7,6 +7,7 @@
 #include "tools/tool_gpio.h"
 #include "tools/tool_subagent.h"
 #include "tools/tool_message.h"
+#include "tools/tool_memory.h"
 
 #include <string.h>
 #include "esp_log.h"
@@ -242,6 +243,30 @@ esp_err_t tool_registry_init(void)
         .execute = tool_message_execute,
     };
     register_tool(&sm);
+
+    /* Register memory_write */
+    mimi_tool_t mw = {
+        .name = "memory_write",
+        .description = "Write or overwrite long-term memory (MEMORY.md). Use this to persist important facts, user preferences, and context across conversations.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{\"content\":{\"type\":\"string\",\"description\":\"The full content to write to MEMORY.md\"}},"
+            "\"required\":[\"content\"]}",
+        .execute = tool_memory_write_execute,
+    };
+    register_tool(&mw);
+
+    /* Register daily_note */
+    mimi_tool_t dn = {
+        .name = "daily_note",
+        .description = "Append a note to today's daily memory file (YYYY-MM-DD.md). Use for logging events, observations, and conversation highlights.",
+        .input_schema_json =
+            "{\"type\":\"object\","
+            "\"properties\":{\"content\":{\"type\":\"string\",\"description\":\"Note to append to today's daily file\"}},"
+            "\"required\":[\"content\"]}",
+        .execute = tool_daily_note_execute,
+    };
+    register_tool(&dn);
 
     build_tools_json();
 

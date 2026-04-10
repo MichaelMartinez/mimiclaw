@@ -281,6 +281,29 @@ static bool tg_response_is_ok(const char *resp, const char **out_desc)
     return false;
 }
 
+static bool is_allowed_sender(const char *chat_id_str)
+{
+    /* Empty allowlist = allow all */
+    if (MIMI_SECRET_TG_ALLOW_FROM[0] == '\0') return true;
+
+    /* Search comma-separated list for matching chat_id */
+    const char *list = MIMI_SECRET_TG_ALLOW_FROM;
+    size_t id_len = strlen(chat_id_str);
+    const char *p = list;
+    while (*p) {
+        while (*p == ',' || *p == ' ') p++;
+        if (*p == '\0') break;
+        const char *end = p;
+        while (*end && *end != ',' && *end != ' ') end++;
+        size_t entry_len = end - p;
+        if (entry_len == id_len && strncmp(p, chat_id_str, entry_len) == 0) {
+            return true;
+        }
+        p = end;
+    }
+    return false;
+}
+
 static void process_updates(const char *json_str)
 {
     cJSON *root = cJSON_Parse(json_str);
@@ -343,6 +366,12 @@ static void process_updates(const char *json_str)
             continue;
         }
 
+        /* Allowlist check */
+        if (!is_allowed_sender(chat_id_str)) {
+            ESP_LOGW(TAG, "Rejected message from unauthorized chat_id: %s", chat_id_str);
+            continue;
+        }
+
         if (msg_id_val >= 0) {
             uint64_t msg_key = make_msg_key(chat_id_str, msg_id_val);
             if (seen_msg_contains(msg_key)) {
@@ -351,6 +380,16 @@ static void process_updates(const char *json_str)
                 continue;
             }
             seen_msg_insert(msg_key);
+        }
+
+        /* Handle /start command */
+        if (strcmp(text->valuestring, "/start") == 0) {
+            ESP_LOGI(TAG, "/start from chat %s", chat_id_str);
+            telegram_send_message(chat_id_str,
+                "Hello! I'm MimiClaw, your personal AI assistant running on an ESP32-S3.\n\n"
+                "I can search the web, remember things, schedule tasks, control GPIO, and more. "
+                "Just send me a message and I'll do my best to help!");
+            continue;
         }
 
         ESP_LOGI(TAG, "Message update_id=%" PRId64 " message_id=%d from chat %s: %.40s...",

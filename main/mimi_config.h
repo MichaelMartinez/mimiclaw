@@ -52,11 +52,41 @@
 #ifndef MIMI_SECRET_QWEN_MODEL
 #define MIMI_SECRET_QWEN_MODEL      ""
 #endif
+#ifndef MIMI_SECRET_OPENROUTER_API_KEY
+#define MIMI_SECRET_OPENROUTER_API_KEY ""
+#endif
+#ifndef MIMI_SECRET_OPENROUTER_MODEL
+#define MIMI_SECRET_OPENROUTER_MODEL ""
+#endif
+#ifndef MIMI_SECRET_TG_ALLOW_FROM
+#define MIMI_SECRET_TG_ALLOW_FROM    ""  /* comma-separated chat IDs, empty = allow all */
+#endif
 
 /* WiFi */
 #define MIMI_WIFI_MAX_RETRY          10
 #define MIMI_WIFI_RETRY_BASE_MS      1000
 #define MIMI_WIFI_RETRY_MAX_MS       30000
+#define MIMI_WIFI_MAX_APS            4
+
+/* WiFi - additional APs (multi-AP support) */
+#ifndef MIMI_SECRET_WIFI_SSID_2
+#define MIMI_SECRET_WIFI_SSID_2     ""
+#endif
+#ifndef MIMI_SECRET_WIFI_PASS_2
+#define MIMI_SECRET_WIFI_PASS_2     ""
+#endif
+#ifndef MIMI_SECRET_WIFI_SSID_3
+#define MIMI_SECRET_WIFI_SSID_3     ""
+#endif
+#ifndef MIMI_SECRET_WIFI_PASS_3
+#define MIMI_SECRET_WIFI_PASS_3     ""
+#endif
+#ifndef MIMI_SECRET_WIFI_SSID_4
+#define MIMI_SECRET_WIFI_SSID_4     ""
+#endif
+#ifndef MIMI_SECRET_WIFI_PASS_4
+#define MIMI_SECRET_WIFI_PASS_4     ""
+#endif
 
 /* Telegram Bot */
 #define MIMI_TG_POLL_TIMEOUT_S       30
@@ -104,6 +134,11 @@
 #define MIMI_QWEN_MAX_TOKENS         4096
 #define MIMI_QWEN_API_URL            "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
 #define MIMI_QWEN_STREAM_BUF_SIZE    (32 * 1024)
+
+/* LLM - OpenRouter */
+#define MIMI_OPENROUTER_DEFAULT_MODEL "anthropic/claude-sonnet-4"
+#define MIMI_OPENROUTER_MAX_TOKENS    4096
+#define MIMI_OPENROUTER_API_URL       "https://openrouter.ai/api/v1/chat/completions"
 
 /* Message Bus */
 #define MIMI_BUS_QUEUE_LEN           16

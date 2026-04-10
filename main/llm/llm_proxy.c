@@ -192,15 +192,21 @@ static bool provider_is_qwen(void)
     return strcmp(s_provider, "qwen") == 0;
 }
 
+static bool provider_is_openrouter(void)
+{
+    return strcmp(s_provider, "openrouter") == 0;
+}
+
 static bool provider_is_openai_like(void)
 {
-    return provider_is_openai() || provider_is_qwen();
+    return provider_is_openai() || provider_is_qwen() || provider_is_openrouter();
 }
 
 static const char *llm_api_url(void)
 {
     if (provider_is_openai()) return MIMI_OPENAI_API_URL;
     if (provider_is_qwen()) return MIMI_QWEN_API_URL;
+    if (provider_is_openrouter()) return MIMI_OPENROUTER_API_URL;
     return MIMI_LLM_API_URL;
 }
 
@@ -208,6 +214,7 @@ static const char *llm_api_host(void)
 {
     if (provider_is_openai()) return "api.openai.com";
     if (provider_is_qwen()) return "dashscope.aliyuncs.com";
+    if (provider_is_openrouter()) return "openrouter.ai";
     return "api.anthropic.com";
 }
 
@@ -215,12 +222,15 @@ static const char *llm_api_path(void)
 {
     if (provider_is_openai()) return "/v1/chat/completions";
     if (provider_is_qwen()) return "/compatible-mode/v1/chat/completions";
+    if (provider_is_openrouter()) return "/api/v1/chat/completions";
     return "/v1/messages";
 }
 
 static int llm_max_tokens(void)
 {
-    return provider_is_qwen() ? MIMI_QWEN_MAX_TOKENS : MIMI_LLM_MAX_TOKENS;
+    if (provider_is_qwen()) return MIMI_QWEN_MAX_TOKENS;
+    if (provider_is_openrouter()) return MIMI_OPENROUTER_MAX_TOKENS;
+    return MIMI_LLM_MAX_TOKENS;
 }
 
 /* ── Init ─────────────────────────────────────────────────────── */
@@ -267,6 +277,10 @@ esp_err_t llm_proxy_init(void)
             if (MIMI_SECRET_QWEN_API_KEY[0] != '\0') {
                 safe_copy(s_api_key, sizeof(s_api_key), MIMI_SECRET_QWEN_API_KEY);
             }
+        } else if (provider_is_openrouter()) {
+            if (MIMI_SECRET_OPENROUTER_API_KEY[0] != '\0') {
+                safe_copy(s_api_key, sizeof(s_api_key), MIMI_SECRET_OPENROUTER_API_KEY);
+            }
         } else if (MIMI_SECRET_API_KEY[0] != '\0') {
             safe_copy(s_api_key, sizeof(s_api_key), MIMI_SECRET_API_KEY);
         }
@@ -277,6 +291,12 @@ esp_err_t llm_proxy_init(void)
                 safe_copy(s_model, sizeof(s_model), MIMI_SECRET_QWEN_MODEL);
             } else {
                 safe_copy(s_model, sizeof(s_model), MIMI_QWEN_DEFAULT_MODEL);
+            }
+        } else if (provider_is_openrouter()) {
+            if (MIMI_SECRET_OPENROUTER_MODEL[0] != '\0') {
+                safe_copy(s_model, sizeof(s_model), MIMI_SECRET_OPENROUTER_MODEL);
+            } else {
+                safe_copy(s_model, sizeof(s_model), MIMI_OPENROUTER_DEFAULT_MODEL);
             }
         } else if (MIMI_SECRET_MODEL[0] != '\0') {
             safe_copy(s_model, sizeof(s_model), MIMI_SECRET_MODEL);
@@ -316,6 +336,10 @@ static esp_err_t llm_http_direct(const char *post_data, resp_buf_t *rb, int *out
             snprintf(auth, sizeof(auth), "Bearer %s", s_api_key);
             esp_http_client_set_header(client, "Authorization", auth);
         }
+        if (provider_is_openrouter()) {
+            esp_http_client_set_header(client, "HTTP-Referer", "https://github.com/MichaelMartinez/mimiclaw");
+            esp_http_client_set_header(client, "X-Title", "MimiClaw");
+        }
     } else {
         esp_http_client_set_header(client, "x-api-key", s_api_key);
         esp_http_client_set_header(client, "anthropic-version", MIMI_LLM_API_VERSION);
@@ -338,7 +362,18 @@ static esp_err_t llm_http_via_proxy(const char *post_data, resp_buf_t *rb, int *
     int body_len = strlen(post_data);
     char header[1024];
     int hlen = 0;
-    if (provider_is_openai_like()) {
+    if (provider_is_openrouter()) {
+        hlen = snprintf(header, sizeof(header),
+            "POST %s HTTP/1.1\r\n"
+            "Host: %s\r\n"
+            "Content-Type: application/json\r\n"
+            "Authorization: Bearer %s\r\n"
+            "HTTP-Referer: https://github.com/MichaelMartinez/mimiclaw\r\n"
+            "X-Title: MimiClaw\r\n"
+            "Content-Length: %d\r\n"
+            "Connection: close\r\n\r\n",
+            llm_api_path(), llm_api_host(), s_api_key, body_len);
+    } else if (provider_is_openai_like()) {
         hlen = snprintf(header, sizeof(header),
             "POST %s HTTP/1.1\r\n"
             "Host: %s\r\n"

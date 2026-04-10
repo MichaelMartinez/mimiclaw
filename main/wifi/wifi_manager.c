@@ -11,11 +11,20 @@
 
 static const char *TAG = "wifi";
 
+typedef struct {
+    char ssid[33];
+    char password[65];
+} wifi_ap_entry_t;
+
 static EventGroupHandle_t s_wifi_event_group;
 static int s_retry_count = 0;
 static char s_ip_str[16] = "0.0.0.0";
 static bool s_connected = false;
 static bool s_reconnect_enabled = true;
+
+static wifi_ap_entry_t s_known_aps[MIMI_WIFI_MAX_APS];
+static int s_known_ap_count = 0;
+static int s_current_ap_idx = 0;
 
 static const char *wifi_reason_to_str(wifi_err_reason_t reason)
 {
@@ -38,7 +47,7 @@ static void event_handler(void *arg, esp_event_base_t event_base,
                           int32_t event_id, void *event_data)
 {
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        /* Don't auto-connect here — wifi_manager_start() handles it after scan */
     } else if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
         wifi_event_sta_disconnected_t *disc = (wifi_event_sta_disconnected_t *)event_data;
@@ -51,10 +60,17 @@ static void event_handler(void *arg, esp_event_base_t event_base,
             if (delay_ms > MIMI_WIFI_RETRY_MAX_MS) {
                 delay_ms = MIMI_WIFI_RETRY_MAX_MS;
             }
-            ESP_LOGW(TAG, "Disconnected, retry %d/%d in %" PRIu32 "ms",
-                     s_retry_count + 1, MIMI_WIFI_MAX_RETRY, delay_ms);
-            vTaskDelay(pdMS_TO_TICKS(delay_ms));
-            esp_wifi_connect();
+            /* After 2 failures on current AP, try next known AP */
+            if (s_retry_count > 0 && s_retry_count % 2 == 0 && s_known_ap_count > 1) {
+                int next = (s_current_ap_idx + 1) % s_known_ap_count;
+                ESP_LOGW(TAG, "Switching to next AP: %s", s_known_aps[next].ssid);
+                connect_to_ap(next);
+            } else {
+                ESP_LOGW(TAG, "Disconnected, retry %d/%d in %" PRIu32 "ms",
+                         s_retry_count + 1, MIMI_WIFI_MAX_RETRY, delay_ms);
+                vTaskDelay(pdMS_TO_TICKS(delay_ms));
+                esp_wifi_connect();
+            }
             s_retry_count++;
         } else {
             ESP_LOGE(TAG, "Failed to connect after %d retries", MIMI_WIFI_MAX_RETRY);
@@ -90,43 +106,124 @@ esp_err_t wifi_manager_init(void)
     return ESP_OK;
 }
 
-esp_err_t wifi_manager_start(void)
+static void load_known_aps(void)
 {
-    wifi_config_t wifi_cfg = {0};
-    bool found = false;
+    s_known_ap_count = 0;
 
-    /* NVS overrides take highest priority (set via CLI) */
+    /* NVS override is always slot 0 if present */
     nvs_handle_t nvs;
     if (nvs_open(MIMI_NVS_WIFI, NVS_READONLY, &nvs) == ESP_OK) {
-        size_t len = sizeof(wifi_cfg.sta.ssid);
-        if (nvs_get_str(nvs, MIMI_NVS_KEY_SSID, (char *)wifi_cfg.sta.ssid, &len) == ESP_OK) {
-            len = sizeof(wifi_cfg.sta.password);
-            nvs_get_str(nvs, MIMI_NVS_KEY_PASS, (char *)wifi_cfg.sta.password, &len);
-            found = true;
+        char ssid[33] = {0};
+        size_t len = sizeof(ssid);
+        if (nvs_get_str(nvs, MIMI_NVS_KEY_SSID, ssid, &len) == ESP_OK && ssid[0]) {
+            strncpy(s_known_aps[0].ssid, ssid, sizeof(s_known_aps[0].ssid) - 1);
+            char pass[65] = {0};
+            len = sizeof(pass);
+            nvs_get_str(nvs, MIMI_NVS_KEY_PASS, pass, &len);
+            strncpy(s_known_aps[0].password, pass, sizeof(s_known_aps[0].password) - 1);
+            s_known_ap_count = 1;
         }
         nvs_close(nvs);
     }
 
-    /* Fall back to build-time secrets */
-    if (!found) {
-        if (MIMI_SECRET_WIFI_SSID[0] != '\0') {
-            strncpy((char *)wifi_cfg.sta.ssid, MIMI_SECRET_WIFI_SSID, sizeof(wifi_cfg.sta.ssid) - 1);
-            strncpy((char *)wifi_cfg.sta.password, MIMI_SECRET_WIFI_PASS, sizeof(wifi_cfg.sta.password) - 1);
-            found = true;
+    /* Build-time APs */
+    const char *ssids[] = { MIMI_SECRET_WIFI_SSID, MIMI_SECRET_WIFI_SSID_2,
+                            MIMI_SECRET_WIFI_SSID_3, MIMI_SECRET_WIFI_SSID_4 };
+    const char *passes[] = { MIMI_SECRET_WIFI_PASS, MIMI_SECRET_WIFI_PASS_2,
+                             MIMI_SECRET_WIFI_PASS_3, MIMI_SECRET_WIFI_PASS_4 };
+
+    for (int i = 0; i < 4 && s_known_ap_count < MIMI_WIFI_MAX_APS; i++) {
+        if (ssids[i][0] == '\0') continue;
+        /* Skip if already added from NVS */
+        bool dup = false;
+        for (int j = 0; j < s_known_ap_count; j++) {
+            if (strcmp(s_known_aps[j].ssid, ssids[i]) == 0) { dup = true; break; }
+        }
+        if (dup) continue;
+        strncpy(s_known_aps[s_known_ap_count].ssid, ssids[i],
+                sizeof(s_known_aps[0].ssid) - 1);
+        strncpy(s_known_aps[s_known_ap_count].password, passes[i],
+                sizeof(s_known_aps[0].password) - 1);
+        s_known_ap_count++;
+    }
+
+    ESP_LOGI(TAG, "Loaded %d known WiFi AP(s)", s_known_ap_count);
+    for (int i = 0; i < s_known_ap_count; i++) {
+        ESP_LOGI(TAG, "  [%d] %s", i, s_known_aps[i].ssid);
+    }
+}
+
+static int find_best_known_ap(void)
+{
+    /* Quick scan to find which known APs are visible */
+    wifi_scan_config_t scan_cfg = { .show_hidden = false };
+    if (esp_wifi_scan_start(&scan_cfg, true) != ESP_OK) {
+        return 0;  /* Fall back to first AP */
+    }
+
+    uint16_t ap_count = 0;
+    esp_wifi_scan_get_ap_num(&ap_count);
+    if (ap_count == 0) return 0;
+
+    wifi_ap_record_t *ap_list = calloc(ap_count, sizeof(wifi_ap_record_t));
+    if (!ap_list) return 0;
+
+    uint16_t ap_max = ap_count;
+    esp_wifi_scan_get_ap_records(&ap_max, ap_list);
+
+    int best_idx = 0;
+    int best_rssi = -127;
+
+    for (uint16_t i = 0; i < ap_max; i++) {
+        for (int k = 0; k < s_known_ap_count; k++) {
+            if (strcmp((const char *)ap_list[i].ssid, s_known_aps[k].ssid) == 0) {
+                if (ap_list[i].rssi > best_rssi) {
+                    best_rssi = ap_list[i].rssi;
+                    best_idx = k;
+                }
+            }
         }
     }
 
-    if (!found) {
+    free(ap_list);
+    if (best_rssi > -127) {
+        ESP_LOGI(TAG, "Best known AP: %s (RSSI %d)", s_known_aps[best_idx].ssid, best_rssi);
+    }
+    return best_idx;
+}
+
+static esp_err_t connect_to_ap(int idx)
+{
+    if (idx < 0 || idx >= s_known_ap_count) return ESP_ERR_INVALID_ARG;
+
+    wifi_config_t wifi_cfg = {0};
+    strncpy((char *)wifi_cfg.sta.ssid, s_known_aps[idx].ssid, sizeof(wifi_cfg.sta.ssid) - 1);
+    strncpy((char *)wifi_cfg.sta.password, s_known_aps[idx].password, sizeof(wifi_cfg.sta.password) - 1);
+
+    s_current_ap_idx = idx;
+    ESP_LOGI(TAG, "Connecting to SSID: %s", wifi_cfg.sta.ssid);
+
+    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
+    return esp_wifi_connect();
+}
+
+esp_err_t wifi_manager_start(void)
+{
+    load_known_aps();
+
+    if (s_known_ap_count == 0) {
         ESP_LOGW(TAG, "No WiFi credentials. Use CLI: wifi_set <SSID> <PASS>");
         return ESP_ERR_NOT_FOUND;
     }
 
     s_reconnect_enabled = true;
-    ESP_LOGI(TAG, "Connecting to SSID: %s", wifi_cfg.sta.ssid);
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    /* Scan and connect to strongest known AP */
+    int best = find_best_known_ap();
+    connect_to_ap(best);
 
     return ESP_OK;
 }
